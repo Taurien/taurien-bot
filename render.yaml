@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: taurienbot
+    env: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: TARGET_CHAT_ID
+        sync: false
+      - key: WHATSAPP_NUMBER
+        sync: false
+      - key: DEV_MODE
+        value: "False"
+      - key: TIMEZONE
+        value: "America/Bogota"

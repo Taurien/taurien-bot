@@ -1,0 +1,36 @@
+# Git
+.git
+.gitignore
+README.md
+DEPLOYMENT.md
+RENDER_DEPLOYMENT.md
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Environment files
+.env
+
+# VS Code
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Logs
+*.log
+result.logs
+
+# Development files  
+runtime.txt
+build.sh
