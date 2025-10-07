@@ -1,0 +1,30 @@
+# Core Telegram Bot Dependencies (with job-queue support)
+python-telegram-bot[job-queue]==20.7
+
+# Web Scraping Dependencies
+requests==2.31.0
+beautifulsoup4==4.12.2
+
+# Time Zone Handling
+pytz==2023.4
+
+# Environment Variables
+python-dotenv==1.0.0
+
+# Web Automation (for form filling)
+playwright==1.40.0
+
+# HTML Parsing (additional parser for BeautifulSoup)
+lxml==5.1.0
+
+# Type Hints Support
+typing-extensions==4.9.0
+
+# Cryptography dependencies (required by telegram bot)
+cffi==1.16.0
+pycparser==2.21
+
+# Notes:
+# - asyncio and concurrent.futures are built-in Python modules (no installation needed)
+# - After installing Playwright, run: python -m playwright install
+# - Make sure to install Chromium browser: python -m playwright install chromium
