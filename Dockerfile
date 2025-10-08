@@ -33,5 +33,5 @@ ENV DEV_MODE=False
 # Expose port for webhook mode
 EXPOSE 8080
 
-# Use webhook version for production deployment
-CMD ["python", "main_webhook.py"]
+# Use unified main.py for both dev and production
+CMD ["python", "main.py"]

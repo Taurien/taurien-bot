@@ -8,6 +8,8 @@ from dotenv import load_dotenv
 import sys
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+import threading
+import json
 
 # Import from the c7 actions package
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -38,11 +40,20 @@ DAILY_TIME = time(hour=7, minute=30, tzinfo=pytz.timezone(TIMEZONE))
 DEV_MODE = os.getenv("DEV_MODE", "True").lower() == "true"  # Convert string to boolean
 DEV_REMINDER_MINUTES = int(os.getenv("DEV_REMINDER_MINUTES", "2"))  # Convert to int
 
+# Webhook configuration (only used in production mode)
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # e.g., "https://your-app.onrender.com"
+PORT = int(os.getenv("PORT", 8080))
+
 # Validate required environment variables
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable is required")
 if not TARGET_CHAT_ID:
     raise ValueError("TARGET_CHAT_ID environment variable is required")
+if not DEV_MODE and not WEBHOOK_URL:
+    raise ValueError("WEBHOOK_URL environment variable is required for production mode")
+
+# Global application instance (used for webhook mode)
+application = None
 
 
 def should_send_reminder_today(target_date=None):
@@ -611,11 +622,20 @@ async def dev_mode_immediate_reminder(context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     """Start the bot, register handlers, and set up the job queue."""
+    global application
+
     mode_text = "DEV MODE" if DEV_MODE else "PRODUCTION MODE"
     logger.info(f"Starting Daily Order Reminder Bot... ({mode_text})")
 
-    # Build the application with job queue enabled
-    application = Application.builder().token(BOT_TOKEN).build()
+    # Build the application with better timeout settings
+    application = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .get_updates_read_timeout(10)
+        .get_updates_write_timeout(10)
+        .get_updates_connect_timeout(10)
+        .build()
+    )
 
     # Register command handlers
     application.add_handler(CommandHandler("start", start_command))
@@ -641,34 +661,100 @@ def main():
     if DEV_MODE:
         application.job_queue.run_once(dev_mode_immediate_reminder, 3)
 
-    try:
-        # Clear any existing webhook first to avoid conflicts
-        import asyncio
+    if DEV_MODE:
+        # Development mode: Use polling
+        logger.info("DEV MODE: Using polling")
+        try:
+            logger.info("Starting polling with conflict resolution...")
+            # Start polling with improved settings
+            application.run_polling(poll_interval=3, drop_pending_updates=True)
+        except Exception as e:
+            logger.error(f"Error starting bot: {e}")
+            raise
+    else:
+        # Production mode: Use webhook with Flask
+        logger.info("PRODUCTION MODE: Using webhook")
 
-        async def clear_webhook():
-            await application.bot.delete_webhook(drop_pending_updates=True)
-            logger.info("Cleared any existing webhooks")
+        # Import Flask only when needed (for production)
+        try:
+            from flask import Flask, request
+        except ImportError:
+            logger.error(
+                "Flask is required for production mode. Install with: pip install flask"
+            )
+            raise
 
-        # Run the webhook clearing
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(clear_webhook())
-        loop.close()
+        # Flask app for webhook
+        app = Flask(__name__)
 
-        # Start polling with more robust settings
-        logger.info("Starting polling with conflict resolution...")
-        application.run_polling(
-            poll_interval=3,
-            timeout=10,
-            bootstrap_retries=5,
-            read_timeout=10,
-            write_timeout=10,
-            connect_timeout=10,
-            drop_pending_updates=True,
-        )
-    except Exception as e:
-        logger.error(f"Error starting bot: {e}")
-        raise
+        @app.route("/webhook", methods=["POST"])
+        def webhook():
+            """Handle incoming webhook updates from Telegram."""
+            try:
+                # Get the update from the request
+                update_dict = request.get_json(force=True)
+                update = Update.de_json(update_dict, application.bot)
+
+                # Process the update using threading to avoid blocking Flask
+                def process_update():
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(application.process_update(update))
+                    loop.close()
+
+                # Run in a separate thread
+                thread = threading.Thread(target=process_update)
+                thread.start()
+
+                return "OK", 200
+            except Exception as e:
+                logger.error(f"Error processing webhook: {e}")
+                return "Error", 500
+
+        @app.route("/health", methods=["GET"])
+        def health():
+            """Health check endpoint."""
+            return {"status": "healthy", "mode": "PRODUCTION"}, 200
+
+        @app.route("/", methods=["GET"])
+        def home():
+            """Home endpoint."""
+            return "Telegram Bot is running in PRODUCTION MODE", 200
+
+        async def setup_webhook():
+            """Set up the webhook for production mode."""
+            webhook_url = f"{WEBHOOK_URL}/webhook"
+            await application.bot.set_webhook(webhook_url)
+            logger.info(f"Webhook set to: {webhook_url}")
+
+        # Initialize the application
+        async def init_app():
+            await application.initialize()
+            await setup_webhook()
+            await application.start()
+            # Start the job queue
+            application.job_queue.start()
+
+        # Create event loop for async operations
+        def run_async_init():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(init_app())
+            # Keep the loop running for job queue
+            loop.run_forever()
+
+        # Start the async initialization in a separate thread
+        async_thread = threading.Thread(target=run_async_init, daemon=True)
+        async_thread.start()
+
+        # Small delay to ensure initialization completes
+        import time
+
+        time.sleep(2)
+
+        # Start Flask in the main thread
+        logger.info(f"Starting Flask server on port {PORT}")
+        app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False)
 
 
 if __name__ == "__main__":
