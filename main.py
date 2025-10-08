@@ -733,7 +733,7 @@ def main():
             await setup_webhook()
             await application.start()
             # Start the job queue
-            application.job_queue.start()
+            await application.job_queue.start()
 
         # Create event loop for async operations
         def run_async_init():
