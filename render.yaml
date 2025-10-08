@@ -15,3 +15,7 @@ services:
         value: "False"
       - key: TIMEZONE
         value: "America/Bogota"
+      - key: WEBHOOK_URL
+        value: "https://taurienbot.onrender.com"
+      - key: PORT
+        value: "8080"

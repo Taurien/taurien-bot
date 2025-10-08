@@ -8,6 +8,9 @@ from dotenv import load_dotenv
 import sys
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from flask import Flask, request
+import threading
+import json
 
 # Import from the c7 actions package
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -34,6 +37,10 @@ MENU_2_CALLBACK_DATA = "MENU_2"
 TIMEZONE = os.getenv("TIMEZONE", "America/Bogota")  # Default fallback
 DAILY_TIME = time(hour=7, minute=30, tzinfo=pytz.timezone(TIMEZONE))
 
+# Webhook configuration
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # e.g., "https://your-app.onrender.com/webhook"
+PORT = int(os.getenv("PORT", 8080))
+
 # Development Mode Configuration from environment
 DEV_MODE = os.getenv("DEV_MODE", "True").lower() == "true"  # Convert string to boolean
 DEV_REMINDER_MINUTES = int(os.getenv("DEV_REMINDER_MINUTES", "2"))  # Convert to int
@@ -43,59 +50,46 @@ if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN environment variable is required")
 if not TARGET_CHAT_ID:
     raise ValueError("TARGET_CHAT_ID environment variable is required")
+if not DEV_MODE and not WEBHOOK_URL:
+    raise ValueError("WEBHOOK_URL environment variable is required for production mode")
+
+# Global application instance
+application = None
 
 
 def should_send_reminder_today(target_date=None):
     """
     Determine if a reminder should be sent based on the weekly schedule:
-    - 3 days per week (Monday, Tuesday, Wednesday) normally
-    - 5 days per week (Monday through Friday) during the third week of each month
-
-    Args:
-        target_date: datetime object to check (defaults to today in Colombian timezone)
-
-    Returns:
-        bool: True if reminder should be sent, False otherwise
+    - Normal weeks: Monday, Tuesday, Wednesday (3 days)
+    - Third week of the month: Monday through Friday (5 days)
     """
-    if target_date is None:
-        colombia_tz = pytz.timezone(TIMEZONE)
-        target_date = datetime.now(colombia_tz)
+    colombia_tz = pytz.timezone(TIMEZONE)
 
-    # Get the day of the week (0=Monday, 1=Tuesday, ..., 6=Sunday)
+    if target_date is None:
+        target_date = datetime.now(colombia_tz).date()
+    elif isinstance(target_date, datetime):
+        target_date = target_date.date()
+
+    # Get the weekday (0=Monday, 6=Sunday)
     weekday = target_date.weekday()
 
-    # Calculate which week of the month this is
-    # Get the first day of the month
+    # Calculate which week of the month this date falls in
     first_day = target_date.replace(day=1)
-    # Calculate how many days into the month we are
     days_into_month = target_date.day
-    # Calculate which week (1-based) - account for partial first week
     week_of_month = ((days_into_month - 1 + first_day.weekday()) // 7) + 1
 
-    # Check if it's the third week of the month
-    is_third_week = week_of_month == 3
+    # Third week of month: Monday-Friday (weekdays 0-4)
+    if week_of_month == 3:
+        return weekday <= 4  # Monday through Friday
 
-    if is_third_week:
-        # Third week: Monday through Friday (weekdays 0-4)
-        return weekday <= 4  # Monday(0) to Friday(4)
-    else:
-        # Normal weeks: Monday, Tuesday, Wednesday (weekdays 0-2)
-        return weekday <= 2  # Monday(0) to Wednesday(2)
+    # All other weeks: Monday-Wednesday (weekdays 0-2)
+    return weekday <= 2  # Monday through Wednesday
 
 
-def get_next_reminder_date(current_date=None):
-    """
-    Calculate the next date when a reminder should be sent.
-
-    Args:
-        current_date: datetime object to start from (defaults to now in Colombian timezone)
-
-    Returns:
-        datetime: Next date when reminder should be sent
-    """
-    if current_date is None:
-        colombia_tz = pytz.timezone(TIMEZONE)
-        current_date = datetime.now(colombia_tz)
+def get_next_reminder_date():
+    """Calculate the next date when a reminder should be sent."""
+    colombia_tz = pytz.timezone(TIMEZONE)
+    current_date = datetime.now(colombia_tz)
 
     # Start checking from tomorrow
     check_date = current_date + timedelta(days=1)
@@ -152,15 +146,6 @@ async def daily_order_reminder(context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         logger.error(f"Error sending daily reminder: {e}")
-
-
-# async def send_oki_message(context: ContextTypes.DEFAULT_TYPE):
-#     """Send the 'OKi' confirmation message."""
-#     try:
-#         await context.bot.send_message(chat_id=TARGET_CHAT_ID, text="OKi")
-#         logger.info("OKi message sent successfully")
-#     except Exception as e:
-#         logger.error(f"Error sending OKi message: {e}")
 
 
 async def send_menu_options(
@@ -487,31 +472,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await daily_order_reminder(context)
 
 
-# def main():
-#     """Start the bot, register handlers, and set up the job queue."""
-
-#     application = Application.builder().token(BOT_TOKEN).build()
-
-#     # 1. Register a dedicated handler for the /start command
-#     # Assuming you have a function called 'start_command' to handle user input
-#     application.add_handler(CommandHandler("start", start_command))
-
-#     # 2. Get the JobQueue (will work after the installation fix)
-#     job_queue = application.job_queue
-
-#     # 3. Schedule the 'start_command' function to run once after 60 seconds
-#     #    It's okay to call start_command here, but ideally you'd have a separate job function.
-#     job_queue.run_once(start_command, 60)
-
-#     print("Bot is starting polling and scheduled 'start_command' to run in 60 seconds.")
-#     application.run_polling(poll_interval=3)
-
-
-# if __name__ == "__main__":
-#     main()
-#     pass  # Uncomment the lines above to run the bot
-
-
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Stop the daily order reminders."""
     chat_id = str(update.effective_chat.id)
@@ -609,8 +569,71 @@ async def dev_mode_immediate_reminder(context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"DEV MODE: Error sending immediate reminder: {e}")
 
 
+# Flask app for webhook
+app = Flask(__name__)
+
+
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    """Handle incoming webhook updates from Telegram."""
+    try:
+        # Get the update from the request
+        update_dict = request.get_json(force=True)
+        update = Update.de_json(update_dict, application.bot)
+
+        # Process the update using threading to avoid blocking Flask
+        def process_update():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(application.process_update(update))
+            loop.close()
+
+        # Run in a separate thread
+        import threading
+
+        thread = threading.Thread(target=process_update)
+        thread.start()
+
+        return "OK", 200
+    except Exception as e:
+        logger.error(f"Error processing webhook: {e}")
+        return "Error", 500
+
+
+@app.route("/health", methods=["GET"])
+def health():
+    """Health check endpoint."""
+    return {"status": "healthy", "mode": "DEV" if DEV_MODE else "PRODUCTION"}, 200
+
+
+@app.route("/", methods=["GET"])
+def home():
+    """Home endpoint."""
+    mode_text = "DEV MODE" if DEV_MODE else "PRODUCTION MODE"
+    return f"Telegram Bot is running in {mode_text}", 200
+
+
+async def setup_webhook():
+    """Set up the webhook for production mode."""
+    if not DEV_MODE and WEBHOOK_URL:
+        webhook_url = f"{WEBHOOK_URL}/webhook"
+        await application.bot.set_webhook(webhook_url)
+        logger.info(f"Webhook set to: {webhook_url}")
+    else:
+        # Delete webhook for dev mode (use polling instead)
+        await application.bot.delete_webhook()
+        logger.info("Webhook deleted - using polling for dev mode")
+
+
+def run_flask():
+    """Run Flask app in a separate thread."""
+    app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False)
+
+
 def main():
     """Start the bot, register handlers, and set up the job queue."""
+    global application
+
     mode_text = "DEV MODE" if DEV_MODE else "PRODUCTION MODE"
     logger.info(f"Starting Daily Order Reminder Bot... ({mode_text})")
 
@@ -637,38 +660,49 @@ def main():
     logger.info("/stop - Deactivate order reminders")
     logger.info("/status - Check current schedule and next reminder")
 
-    # Schedule immediate reminder if in dev mode
     if DEV_MODE:
+        # Development mode: Use polling
+        logger.info("DEV MODE: Using polling")
+
+        # Schedule immediate reminder if in dev mode
         application.job_queue.run_once(dev_mode_immediate_reminder, 3)
 
-    try:
-        # Clear any existing webhook first to avoid conflicts
-        import asyncio
+        # Start polling
+        application.run_polling(poll_interval=3)
+    else:
+        # Production mode: Use webhook with Flask
+        logger.info("PRODUCTION MODE: Using webhook")
 
-        async def clear_webhook():
-            await application.bot.delete_webhook(drop_pending_updates=True)
-            logger.info("Cleared any existing webhooks")
+        # Initialize the application synchronously
+        async def init_app():
+            await application.initialize()
+            await setup_webhook()
+            await application.start()
+            # Start the job queue
+            application.job_queue.start()
 
-        # Run the webhook clearing
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(clear_webhook())
-        loop.close()
+        # Create event loop for async operations
+        import threading
 
-        # Start polling with more robust settings
-        logger.info("Starting polling with conflict resolution...")
-        application.run_polling(
-            poll_interval=3,
-            timeout=10,
-            bootstrap_retries=5,
-            read_timeout=10,
-            write_timeout=10,
-            connect_timeout=10,
-            drop_pending_updates=True,
-        )
-    except Exception as e:
-        logger.error(f"Error starting bot: {e}")
-        raise
+        def run_async_init():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(init_app())
+            # Keep the loop running for job queue
+            loop.run_forever()
+
+        # Start the async initialization in a separate thread
+        async_thread = threading.Thread(target=run_async_init, daemon=True)
+        async_thread.start()
+
+        # Small delay to ensure initialization completes
+        import time
+
+        time.sleep(2)
+
+        # Start Flask in the main thread
+        logger.info(f"Starting Flask server on port {PORT}")
+        run_flask()
 
 
 if __name__ == "__main__":

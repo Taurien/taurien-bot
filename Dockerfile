@@ -30,7 +30,8 @@ COPY . .
 # Set production mode
 ENV DEV_MODE=False
 
-# Expose port for health checks (optional)
+# Expose port for webhook mode
 EXPOSE 8080
 
-CMD ["python", "main.py"]
+# Use webhook version for production deployment
+CMD ["python", "main_webhook.py"]
