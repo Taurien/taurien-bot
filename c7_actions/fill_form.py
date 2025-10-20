@@ -54,9 +54,10 @@ def fill_c7_form(menu_choice, menu_quantity=1, headless=True, form_url=None):
 
     try:
         with sync_playwright() as p:
-            # Launch browser in headless mode by default
-            browser = p.chromium.launch(headless=headless)
-            page = browser.new_page()
+            # Always set user-agent and slow_mo, use user-provided headless argument
+            browser = p.chromium.launch(headless=headless, slow_mo=100)
+            user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            page = browser.new_page(user_agent=user_agent)
 
             # Navigate to form
             print(f"Navigating to form: {form_url}")
@@ -73,28 +74,40 @@ def fill_c7_form(menu_choice, menu_quantity=1, headless=True, form_url=None):
 
             # Fill menu choice based on parameter
             # Note: Menu fields are now dropdown/listbox elements instead of text inputs
+            def click_menu_option(dropdown_locator, menu_quantity, menu_label):
+                dropdown_locator.click()
+                time.sleep(1)
+                options = page.locator('div[role="option"]')
+                found = False
+                visible_options = []
+                for i in range(options.count()):
+                    option = options.nth(i)
+                    if option.is_visible():
+                        text = option.inner_text().strip()
+                        visible_options.append(text)
+                        if text == str(menu_quantity):
+                            option.click()
+                            found = True
+                            break
+                if not found:
+                    print(
+                        f"{menu_label} quantity option '{menu_quantity}' not found. Visible options: {visible_options}"
+                    )
+                    return False
+                return True
+
             if menu_choice == 1:
                 print(f"Selecting Menu 1 with quantity: {menu_quantity}")
-                # Wait for listboxes to be available
                 page.wait_for_selector('div[role="listbox"]', timeout=10000)
-                # First listbox is Menu 1 - click to focus it
                 menu1_dropdown = page.locator('div[role="listbox"]').first
-                menu1_dropdown.click()
-                time.sleep(0.5)  # Small delay for dropdown to be ready
-                # Click on the option with the desired quantity
-                menu1_option = page.locator(f'div[role="listbox"]').first.locator(f'div[role="option"][data-value="{menu_quantity}"]')
-                menu1_option.click()
+                if not click_menu_option(menu1_dropdown, menu_quantity, "Menu 1"):
+                    return False
             elif menu_choice == 2:
                 print(f"Selecting Menu 2 with quantity: {menu_quantity}")
-                # Wait for listboxes to be available
                 page.wait_for_selector('div[role="listbox"]', timeout=10000)
-                # Second listbox is Menu 2 - click to focus it
                 menu2_dropdown = page.locator('div[role="listbox"]').nth(1)
-                menu2_dropdown.click()
-                time.sleep(0.5)  # Small delay for dropdown to be ready
-                # Click on the option with the desired quantity
-                menu2_option = page.locator(f'div[role="listbox"]').nth(1).locator(f'div[role="option"][data-value="{menu_quantity}"]')
-                menu2_option.click()
+                if not click_menu_option(menu2_dropdown, menu_quantity, "Menu 2"):
+                    return False
             else:
                 print("Invalid menu choice. Must be 1 or 2")
                 return False
