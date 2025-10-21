@@ -63,13 +63,15 @@ def fill_c7_form(menu_choice, menu_quantity=1, headless=True, form_url=None):
             print(f"Navigating to form: {form_url}")
             page.goto(form_url)
 
-            # Wait for form to load
-            page.wait_for_selector('input[type="text"]', timeout=10000)
-
-            # Fill WhatsApp number (required field)
+            # Wait for WhatsApp field by label
+            page.wait_for_selector(
+                "//div[contains(., 'Tu número de WhatsApp')]/following::input[@type='text'][1]",
+                timeout=10000,
+            )
             print(f"Filling WhatsApp number: {whatsapp_number}")
-            # Wait for the first text input (WhatsApp field)
-            whatsapp_input = page.locator('input[type="text"]').first
+            whatsapp_input = page.locator(
+                "//div[contains(., 'Tu número de WhatsApp')]/following::input[@type='text'][1]"
+            )
             whatsapp_input.fill(whatsapp_number)
 
             # Fill menu choice based on parameter
@@ -98,14 +100,16 @@ def fill_c7_form(menu_choice, menu_quantity=1, headless=True, form_url=None):
 
             if menu_choice == 1:
                 print(f"Selecting Menu 1 with quantity: {menu_quantity}")
-                page.wait_for_selector('div[role="listbox"]', timeout=10000)
-                menu1_dropdown = page.locator('div[role="listbox"]').first
+                menu1_dropdown_xpath = "//div[contains(., 'MENÚ 1 $20.000')]/following::div[@role='listbox'][1]"
+                page.wait_for_selector(menu1_dropdown_xpath, timeout=10000)
+                menu1_dropdown = page.locator(menu1_dropdown_xpath)
                 if not click_menu_option(menu1_dropdown, menu_quantity, "Menu 1"):
                     return False
             elif menu_choice == 2:
                 print(f"Selecting Menu 2 with quantity: {menu_quantity}")
-                page.wait_for_selector('div[role="listbox"]', timeout=10000)
-                menu2_dropdown = page.locator('div[role="listbox"]').nth(1)
+                menu2_dropdown_xpath = "//div[contains(., 'MENÚ 2 $20.000')]/following::div[@role='listbox'][1]"
+                page.wait_for_selector(menu2_dropdown_xpath, timeout=10000)
+                menu2_dropdown = page.locator(menu2_dropdown_xpath)
                 if not click_menu_option(menu2_dropdown, menu_quantity, "Menu 2"):
                     return False
             else:
@@ -114,11 +118,11 @@ def fill_c7_form(menu_choice, menu_quantity=1, headless=True, form_url=None):
 
             # Select utensils option (always NO)
             print(f"Selecting utensils: {utensils_choice}")
-            # Wait for radio buttons to load and find NO option
-            page.wait_for_selector('div[role="radiogroup"]', timeout=10000)
-            no_radio = page.locator('div[role="radiogroup"] div[role="radio"]').nth(
-                1
-            )  # Second radio button is NO
+            # Wait for radio group by label
+            cubiertos_radio_xpath = "//div[contains(., 'CUBIERTOS $1.000')]/following::div[@role='radiogroup'][1]"
+            page.wait_for_selector(cubiertos_radio_xpath, timeout=10000)
+            # Find the NO radio button (usually second)
+            no_radio = page.locator(f"{cubiertos_radio_xpath}//div[@role='radio'][2]")
             no_radio.click()
 
             # Wait a moment for the selection to register

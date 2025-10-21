@@ -32,7 +32,7 @@ N_CALLBACK_DATA = "ORDER_N"
 MENU_1_CALLBACK_DATA = "MENU_1"
 MENU_2_CALLBACK_DATA = "MENU_2"
 TIMEZONE = os.getenv("TIMEZONE", "America/Bogota")  # Default fallback
-DAILY_TIME = time(hour=7, minute=45, tzinfo=pytz.timezone(TIMEZONE))
+DAILY_TIME = time(hour=7, minute=30, tzinfo=pytz.timezone(TIMEZONE))
 
 # Development Mode Configuration from environment
 DEV_MODE = os.getenv("DEV_MODE", "True").lower() == "true"  # Convert string to boolean
